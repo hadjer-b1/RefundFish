@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RefundFish - AI Hotel Price Monitor</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%231E3A8A' width='100' height='100'/><text x='50' y='70' font-size='60' fill='%2310B981' text-anchor='middle' font-weight='bold'>RF</text></svg>"
+    />
     <link rel="stylesheet" href="/static/style.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/icon?family=Material+Icons"
+    />
   </head>
   <body>
     <div class="app-container">
@@ -13,16 +22,17 @@
         <div class="header-content">
           <div class="header-main">
             <div class="logo-title">
-             <img src="/static/logo.png" alt="RefundFish Logo" class="logo"  />
+              <img src="/static/logo.png" alt="RefundFish Logo" class="logo" />
             </div>
             <p>AI-Powered Hotel Price Monitoring & Auto-Refund System</p>
           </div>
 
           <!-- Quick Credential Status in Header -->
           <div class="header-cred-status">
-            <span id="cred_status_indicator" class="cred-badge not-set"
-              >🔓 No Credentials</span
-            >
+            <span id="cred_status_indicator" class="cred-badge not-set">
+              <i class="material-icons icon-small">lock_open</i>
+              No Credentials
+            </span>
           </div>
         </div>
       </header>
@@ -34,7 +44,10 @@
           <!-- Credentials Section - FIRST & PROMINENT -->
           <section class="credentials-section prominent">
             <div class="credentials-header">
-              <h2>🔐 Login Credentials</h2>
+              <h2>
+                <i class="material-icons icon-inline">security</i>Login
+                Credentials
+              </h2>
               <span id="cred_saved_count" class="badge" style="display: none"
                 >Saved</span
               >
@@ -67,46 +80,52 @@
               </div>
 
               <div class="form-group">
-                <label>Password (or leave blank if using 2FA)</label>
+                <label>
+                  Open the account on the same Browser or use Password
+                </label>
                 <div class="password-input-wrapper">
                   <input
                     type="password"
                     id="cred_password"
-                    placeholder="Optional - if not using 2FA"
+                    placeholder="Optional"
                     class="form-control"
                   />
                   <button
                     type="button"
                     class="toggle-password"
                     onclick="togglePasswordVisibility()"
+                    title="Show/Hide Password"
                   >
-                    👁️
+                    <i class="material-icons">visibility</i>
                   </button>
                 </div>
               </div>
 
               <div class="form-group">
-                <label>2FA/Verification Code (if website asks for it)</label>
+                <label>2FA/Verification Code </label>
                 <input
                   type="text"
                   id="cred_2fa_code"
-                  placeholder="e.g., 123456 (leave blank if not using 2FA)"
+                  placeholder="e.g., 123456 (if applicable)"
                   class="form-control"
                   maxlength="10"
                 />
                 <small class="hint-text"
-                  >📧 Check your email for the verification code if Booking.com
+                  >Check your email for the verification code if Booking.com
                   sent one</small
                 >
               </div>
 
               <button class="btn btn-danger" onclick="saveCredentials()">
-                💾 Save
+                <i class="material-icons icon-button">save</i>Save Credentials
               </button>
             </div>
 
             <div id="saved_creds" class="saved-credentials">
-              <h3>✓ Saved Credentials</h3>
+              <h3>
+                <i class="material-icons icon-small">check_circle</i>Saved
+                Credentials
+              </h3>
               <div id="cred_list" class="cred-list"></div>
             </div>
 
@@ -115,7 +134,10 @@
 
           <!-- Auto-Fetch Reservations Section -->
           <section class="fetch-section">
-            <h2>📥 Auto-Fetch Your Bookings</h2>
+            <h2>
+              <i class="material-icons icon-inline">download</i>Auto-Fetch Your
+              Bookings
+            </h2>
             <p class="section-note">
               Uses your saved credentials to automatically load all your
               reservations
@@ -137,7 +159,8 @@
               class="btn btn-success"
               onclick="fetchReservations()"
             >
-              🔗 Fetch My Reservations
+              <i class="material-icons icon-button">cloud_download</i>Fetch
+              Reservations
             </button>
 
             <div id="fetch_status" class="status-message"></div>
@@ -156,7 +179,10 @@
 
           <!-- Manual Search Section -->
           <section class="search-section">
-            <h2>🔍 Or Search Manually</h2>
+            <h2>
+              <i class="material-icons icon-inline">search</i>Manual Price
+              Search
+            </h2>
             <p class="section-note">Enter hotel details manually</p>
 
             <div class="form-group">
@@ -206,7 +232,7 @@
               class="btn btn-primary"
               onclick="searchHotel()"
             >
-              🔍 Search Price
+              <i class="material-icons icon-button">find_in_page</i>Search Price
             </button>
 
             <div id="search_status" class="status-message"></div>
@@ -214,7 +240,7 @@
 
           <!-- Settings Section -->
           <section class="settings-section">
-            <h2>⚙️ Settings</h2>
+            <h2><i class="material-icons icon-inline">settings</i>Settings</h2>
 
             <div class="settings-group">
               <label>Minimum Savings to Refund ($)</label>
@@ -252,6 +278,25 @@
               <label for="auto_refund">Auto-Refund (when threshold met)</label>
             </div>
 
+            <div class="settings-group monitoring-control">
+              <label class="switch-row">
+                <span class="switch-label"
+                  >Background Monitoring (every 60 min)</span
+                >
+                <span class="mui-switch">
+                  <input
+                    type="checkbox"
+                    id="monitoring_toggle"
+                    onchange="toggleMonitoring(this.checked)"
+                  />
+                  <span class="mui-slider"></span>
+                </span>
+              </label>
+              <small id="monitoring_status" class="hint-text"
+                >Monitoring is stopped</small
+              >
+            </div>
+
             <button class="btn btn-secondary" onclick="saveSettings()">
               Save Settings
             </button>
@@ -259,7 +304,9 @@
 
           <!-- History Section -->
           <section class="history-section">
-            <h2>📋 Search History</h2>
+            <h2>
+              <i class="material-icons icon-inline">history</i>Search History
+            </h2>
             <div id="history_list" class="history-list"></div>
             <button class="btn btn-small" onclick="clearHistory()">
               Clear History
@@ -279,8 +326,20 @@
 
           <!-- Real-time Logs -->
           <section class="logs-section">
-            <h2>📊 Real-time Activity</h2>
+            <h2>
+              <i class="material-icons icon-inline">assessment</i>Real-time
+              Activity
+            </h2>
             <div id="logs" class="logs-container"></div>
+          </section>
+
+          <section class="activity-log-section">
+            <h2>
+              <i class="material-icons icon-inline">monitoring</i>Activity Log
+            </h2>
+            <div id="activity_log" class="activity-log-container">
+              <div class="placeholder">No activity yet</div>
+            </div>
           </section>
         </div>
       </div>

@@ -256,7 +256,7 @@ def login_to_booking_site(website: str, username: str, password: str = None, two
         return True  # Assume success for now, user should verify
 
 
-def cancel_booking(website: str, username: str, password: str, booking_id: str) -> bool:
+def cancel_booking(website: str, username: str, password: str = None, booking_id: str = "", two_fa_code: str = None) -> bool:
     """
     Cancel an existing hotel booking
     
@@ -273,7 +273,7 @@ def cancel_booking(website: str, username: str, password: str, booking_id: str) 
     logger.info(f"Attempting to cancel booking {booking_id} on {website}...")
     
     # First login
-    if not login_to_booking_site(website, username, password):
+    if not login_to_booking_site(website, username, password, two_fa_code):
         logger.error("Could not login - cannot cancel booking")
         return False
     
@@ -525,8 +525,9 @@ def _normalize_reservation(res: dict) -> dict:
     return {}
 
 
-def rebook_with_new_price(website: str, username: str, password: str, 
-                         hotel_name: str, dates: str, new_price: float) -> bool:
+def rebook_with_new_price(website: str, username: str, password: str = None,
+                         hotel_name: str = "", dates: str = "", new_price: float = 0,
+                         two_fa_code: str = None) -> bool:
     """
     Rebook same hotel at new (lower) price
     
@@ -545,7 +546,7 @@ def rebook_with_new_price(website: str, username: str, password: str,
     logger.info(f"Attempting to rebook {hotel_name} at new price ${new_price}...")
     
     # First login
-    if not login_to_booking_site(website, username, password):
+    if not login_to_booking_site(website, username, password, two_fa_code):
         logger.error("Could not login - cannot rebook")
         return False
     

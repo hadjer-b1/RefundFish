@@ -49,18 +49,21 @@ RefundFish is an intelligent automation system that monitors hotel booking price
 ## Installation
 
 ### Prerequisites
+
 - Python 3.8 or higher
 - TinyFish API key (get one at [tinyfish.ai](https://tinyfish.ai))
 
 ### Setup
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/hadjer-b1/RefundFish.git
    cd RefundFish
    ```
 
 2. **Create Python virtual environment**
+
    ```bash
    python -m venv .venv
    .venv\Scripts\activate  # Windows
@@ -68,21 +71,24 @@ RefundFish is an intelligent automation system that monitors hotel booking price
    ```
 
 3. **Install dependencies**
+
    ```bash
    pip install -r requirements.txt
    ```
 
 4. **Configure environment**
+
    ```bash
    cp .env.example .env
    # Edit .env and add your TinyFish API key
    ```
 
 5. **Start the web application**
+
    ```bash
    python app.py
    ```
-   
+
    Open http://localhost:5000 in your browser
 
 ## Usage
@@ -123,6 +129,7 @@ For Booking.com and platforms using Magic Link:
 ## API Reference
 
 ### Save Credentials
+
 ```bash
 POST /api/credentials/save
 {
@@ -134,6 +141,7 @@ POST /api/credentials/save
 ```
 
 ### Fetch Reservations
+
 ```bash
 POST /api/fetch-reservations
 {
@@ -142,6 +150,7 @@ POST /api/fetch-reservations
 ```
 
 ### Search Current Price
+
 ```bash
 POST /api/search
 {
@@ -207,11 +216,13 @@ RefundFish/
 ## Development
 
 ### Running Tests
+
 ```bash
 python -m pytest tests/
 ```
 
 ### Code Structure
+
 - **Modular design** with separate agents for browser automation and analysis
 - **Error handling** with retry logic for API calls
 - **Structured logging** for debugging and monitoring
@@ -274,4 +285,4 @@ For issues, questions, or feature requests, please open an issue on GitHub.
 
 **Made with 🐟 by RefundFish Team**
 
-*Smart hotel rebooking, powered by AI*
+_Smart hotel rebooking, powered by AI_

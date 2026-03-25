@@ -8,11 +8,14 @@ from flask_cors import CORS
 import json
 import os
 from pathlib import Path
+import smtplib
+from email.message import EmailMessage
+import requests
 from agents.browser_agent import get_current_price, login_to_booking_site, fetch_reservations, cancel_booking, rebook_with_new_price
 from agents.logic_agent import evaluate_refund_opportunity, get_detailed_analysis
 from config.logger import setup_logger
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.credentials import credentials_manager
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -23,6 +26,282 @@ logger = setup_logger("web_app")
 # Store search history and settings
 SEARCH_HISTORY = []
 SETTINGS_FILE = Path('data/settings.json')
+ACTIVITY_LOG_FILE = Path('logs/activity.log')
+MONITOR_INTERVAL_SECONDS = 60 * 60
+MONITOR_STOP_EVENT = threading.Event()
+MONITORING_STATE = {
+    "enabled": False,
+    "target": None,
+    "last_run": None,
+    "next_run": None,
+    "thread": None
+}
+
+
+def write_activity_log(entry: dict):
+    """Persist activity entry to file and logger."""
+    try:
+        ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ACTIVITY_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except Exception as e:
+        logger.error(f"Failed writing activity log: {e}")
+
+
+def log_activity(status: str, message: str, source: str = "system", hotel: str = None,
+                 current_price: float = None, paid_price: float = None, savings: float = None):
+    """Create and persist a structured activity log entry."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "status": status,
+        "source": source,
+        "message": message,
+        "hotel": hotel,
+        "current_price": current_price,
+        "paid_price": paid_price,
+        "savings": savings
+    }
+    write_activity_log(entry)
+    logger.info(f"[ACTIVITY:{status}] {message}")
+
+
+def read_recent_activity(limit: int = 100):
+    """Read recent activity entries from file."""
+    if not ACTIVITY_LOG_FILE.exists():
+        return []
+
+    entries = []
+    try:
+        with open(ACTIVITY_LOG_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        logger.error(f"Failed reading activity log: {e}")
+        return []
+
+    return entries[-limit:]
+
+
+def send_telegram_alert(message: str):
+    """Send alert to Telegram bot if configured."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not bot_token or not chat_id:
+        logger.warning("Telegram not configured (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)")
+        return False
+
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        response = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": message
+        }, timeout=15)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send Telegram alert: {e}")
+        return False
+
+
+def send_confirmation_email(subject: str, body: str):
+    """Send confirmation email if SMTP is configured."""
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    email_from = os.getenv("EMAIL_FROM")
+    email_to = os.getenv("EMAIL_TO")
+
+    if not all([smtp_host, smtp_user, smtp_password, email_from, email_to]):
+        logger.warning("Email not configured (missing SMTP/EMAIL environment variables)")
+        return False
+
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = email_from
+        msg["To"] = email_to
+        msg.set_content(body)
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send email alert: {e}")
+        return False
+
+
+def execute_auto_refund_sequence(website: str, hotel_name: str, dates: str,
+                                 booking_id: str, current_price: float, savings: float):
+    """Execute cancel and rebook sequence using saved credentials."""
+    creds = credentials_manager.get_credentials_for_agent(website)
+    if not creds:
+        return False, f"No saved credentials for {website}"
+
+    username = creds.get('username')
+    password = creds.get('password')
+    two_fa_code = creds.get('two_fa_code')
+
+    if not username:
+        return False, "Missing username in saved credentials"
+
+    if not login_to_booking_site(website, username, password, two_fa_code):
+        return False, "Login failed"
+
+    if booking_id:
+        if not cancel_booking(website, username, password, booking_id, two_fa_code):
+            return False, "Cancellation failed"
+
+    if not rebook_with_new_price(website, username, password, hotel_name, dates, current_price, two_fa_code):
+        return False, "Rebooking failed"
+
+    send_telegram_alert(f"✅ Success! Your booking has been updated. You saved ${savings:.2f}! Check your email for the new confirmation.")
+    send_confirmation_email(
+        subject="RefundFish: Booking Updated Successfully",
+        body=f"RefundFish completed your booking update successfully.\n\nHotel: {hotel_name}\nDates: {dates}\nSavings: ${savings:.2f}\n\nCheck your email for the new booking confirmation."
+    )
+    return True, f"Auto-refund complete. Saved ${savings:.2f}"
+
+
+def run_price_check(hotel_name: str, dates: str, paid_price: float, booking_id: str = "",
+                    source: str = "manual", auto_execute: bool = False):
+    """Execute one full price-check cycle and optionally auto-execute cancel/rebook."""
+    settings = load_settings()
+    website = settings.get('selected_website', 'booking.com')
+
+    logger.info(f"Searching: {hotel_name} for {dates} ({source})")
+    current_price = get_current_price(hotel_name, dates)
+
+    if current_price is None:
+        log_activity(
+            status="error",
+            source=source,
+            hotel=hotel_name,
+            paid_price=paid_price,
+            message="Price check failed (TinyFish timeout or API issue)"
+        )
+        return None, {
+            "error": "Could not fetch price - TinyFish timeout or API issue",
+            "status": "failed",
+            "hotel": hotel_name,
+            "dates": dates
+        }
+
+    should_rebook, savings = evaluate_refund_opportunity(current_price, paid_price)
+    analysis = get_detailed_analysis(current_price, paid_price)
+    meets_threshold = savings >= settings['min_savings_threshold']
+    lower_price_found = current_price < paid_price
+    recommend_refund = should_rebook and meets_threshold
+
+    result = {
+        "status": "success",
+        "hotel": hotel_name,
+        "dates": dates,
+        "paid_price": paid_price,
+        "current_price": current_price,
+        "gross_savings": analysis['gross_savings'],
+        "savings_percent": analysis['savings_percent'],
+        "net_savings": savings,
+        "meets_threshold": meets_threshold,
+        "threshold": settings['min_savings_threshold'],
+        "recommendation": "REBOOK" if recommend_refund else "KEEP CURRENT",
+        "auto_refund_status": "pending",
+        "source": source,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    log_activity(
+        status="success",
+        source=source,
+        hotel=hotel_name,
+        current_price=current_price,
+        paid_price=paid_price,
+        savings=savings,
+        message=f"Price checked. Current: ${current_price:.2f}, Paid: ${paid_price:.2f}, Savings: ${savings:.2f}"
+    )
+
+    # For scheduler checks, execute immediately on lower price.
+    should_auto_execute = auto_execute and lower_price_found
+    if should_auto_execute:
+        send_telegram_alert("🔍 RefundFish found a lower price! Attempting to re-book...")
+        result["auto_refund_status"] = "processing"
+        success, message = execute_auto_refund_sequence(
+            website=website,
+            hotel_name=hotel_name,
+            dates=dates,
+            booking_id=booking_id,
+            current_price=current_price,
+            savings=savings
+        )
+
+        if success:
+            result["auto_refund_status"] = "success"
+            result["message"] = message
+            log_activity(
+                status="success",
+                source=source,
+                hotel=hotel_name,
+                current_price=current_price,
+                paid_price=paid_price,
+                savings=savings,
+                message=f"Auto-refund completed successfully. {message}"
+            )
+        else:
+            result["auto_refund_status"] = "error"
+            result["message"] = message
+            log_activity(
+                status="error",
+                source=source,
+                hotel=hotel_name,
+                current_price=current_price,
+                paid_price=paid_price,
+                savings=savings,
+                message=f"Auto-refund failed: {message}"
+            )
+
+    return result, None
+
+
+def monitoring_loop():
+    """Background monitoring worker (safe, resilient loop)."""
+    log_activity("info", "Background monitoring started", source="scheduler")
+
+    while not MONITOR_STOP_EVENT.is_set() and MONITORING_STATE["enabled"]:
+        target = MONITORING_STATE.get("target")
+        try:
+            if target:
+                MONITORING_STATE["last_run"] = datetime.now().isoformat()
+                run_price_check(
+                    hotel_name=target["hotel_name"],
+                    dates=target["dates"],
+                    paid_price=float(target["paid_price"]),
+                    booking_id=target.get("booking_id", ""),
+                    source="scheduler",
+                    auto_execute=True
+                )
+        except Exception as e:
+            logger.error(f"Scheduler cycle failed: {e}", exc_info=True)
+            log_activity("error", f"Scheduler cycle failed: {e}", source="scheduler")
+
+        MONITORING_STATE["next_run"] = (datetime.now() + timedelta(seconds=MONITOR_INTERVAL_SECONDS)).isoformat()
+
+        for _ in range(MONITOR_INTERVAL_SECONDS):
+            if MONITOR_STOP_EVENT.wait(1):
+                break
+            if not MONITORING_STATE["enabled"]:
+                break
+
+    log_activity("info", "Background monitoring stopped", source="scheduler")
 
 def load_settings():
     """Load user settings"""
@@ -73,107 +352,21 @@ def search_hotel():
         return jsonify({"error": "Missing required fields"}), 400
     
     settings = load_settings()
-    
+
     try:
-        # Step 1: Search for current price
-        logger.info(f"Searching: {hotel_name} for {dates}")
-        current_price = get_current_price(hotel_name, dates)
-        
-        if current_price is None:
-            return jsonify({
-                "error": "Could not fetch price - TinyFish timeout or API issue",
-                "status": "failed",
-                "hotel": hotel_name,
-                "dates": dates
-            }), 500
-        
-        # Step 2: Analyze refund opportunity
-        should_rebook, savings = evaluate_refund_opportunity(current_price, paid_price)
-        analysis = get_detailed_analysis(current_price, paid_price)
-        
-        # Step 3: Apply settings threshold
-        meets_threshold = savings >= settings['min_savings_threshold']
-        recommend_refund = should_rebook and meets_threshold
-        
-        result = {
-            "status": "success",
-            "hotel": hotel_name,
-            "dates": dates,
-            "paid_price": paid_price,
-            "current_price": current_price,
-            "gross_savings": analysis['gross_savings'],
-            "savings_percent": analysis['savings_percent'],
-            "net_savings": savings,
-            "meets_threshold": meets_threshold,
-            "threshold": settings['min_savings_threshold'],
-            "recommendation": "REBOOK" if recommend_refund else "KEEP CURRENT",
-            "auto_refund_status": "pending",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Step 4: AUTO-REFUND LOGIC (if enabled and meets threshold)
-        if recommend_refund and settings.get('auto_refund', False):
-            logger.info("🔄 Auto-refund enabled - initiating automatic rebooking...")
-            result["auto_refund_status"] = "processing"
-            
-            website = settings.get('selected_website', 'booking.com')
-            
-            # Get saved credentials for this website
-            creds = credentials_manager.get_credentials_for_agent(website)
-            
-            if creds:
-                logger.info(f"Found credentials for {website}")
-                username = creds.get('username')
-                password = creds.get('password')
-                two_fa_code = creds.get('two_fa_code')
-                email = creds.get('email')
-                auth_method = "2FA" if two_fa_code else "Password"
-                
-                try:
-                    # Execute auto-refund workflow
-                    logger.info(f"Step 1: Logging in to account (using {auth_method})...")
-                    if login_to_booking_site(website, username, password, two_fa_code):
-                        logger.info("✓ Login successful")
-                        
-                        if booking_id:
-                            logger.info(f"Step 2: Cancelling booking {booking_id}...")
-                            if cancel_booking(website, username, password, booking_id):
-                                logger.info("✓ Booking cancelled")
-                                
-                                logger.info(f"Step 3: Rebooking at new price ${current_price}...")
-                                if rebook_with_new_price(website, username, password, hotel_name, dates, current_price):
-                                    logger.info(f"✓ Successfully rebooked! Saved ${savings:.2f}")
-                                    result["auto_refund_status"] = "success"
-                                    result["message"] = f"✓ Auto-refund complete! Saved ${savings:.2f} 🎉"
-                                else:
-                                    logger.error("Rebooking failed")
-                                    result["auto_refund_status"] = "rebook_failed"
-                                    result["message"] = "Rebooking failed - check manually"
-                            else:
-                                logger.error("Cancellation failed")
-                                result["auto_refund_status"] = "cancel_failed"
-                                result["message"] = "Cancellation failed - check account"
-                        else:
-                            logger.warning("No booking ID provided for cancellation")
-                            result["auto_refund_status"] = "no_booking_id"
-                            result["message"] = "Set booking ID to enable auto-cancellation"
-                    else:
-                        logger.error("Login failed")
-                        result["auto_refund_status"] = "login_failed"
-                        result["message"] = "Could not login - verify credentials"
-                        
-                except Exception as e:
-                    logger.error(f"Auto-refund error: {e}")
-                    result["auto_refund_status"] = "error"
-                    result["message"] = f"Auto-refund error: {str(e)}"
-            else:
-                logger.warning(f"No saved credentials for {website}")
-                result["auto_refund_status"] = "no_credentials"
-                result["message"] = f"Add credentials for {website} to enable auto-refund"
-        
-        # Add to search history
+        result, error = run_price_check(
+            hotel_name=hotel_name,
+            dates=dates,
+            paid_price=paid_price,
+            booking_id=booking_id,
+            source="manual",
+            auto_execute=settings.get('auto_refund', False)
+        )
+
+        if error:
+            return jsonify(error), 500
+
         SEARCH_HISTORY.append(result)
-        
         return jsonify(result)
         
     except Exception as e:
@@ -265,6 +458,86 @@ def api_fetch_reservations():
 def get_history():
     """Get search history"""
     return jsonify(SEARCH_HISTORY)
+
+
+@app.route('/api/activity-log', methods=['GET'])
+def get_activity_log():
+    """Return recent scheduler/manual activity entries."""
+    limit = int(request.args.get('limit', 100))
+    entries = read_recent_activity(limit=limit)
+    return jsonify(entries)
+
+
+@app.route('/api/monitoring/status', methods=['GET'])
+def monitoring_status():
+    """Get current monitoring status."""
+    return jsonify({
+        "enabled": MONITORING_STATE["enabled"],
+        "target": MONITORING_STATE["target"],
+        "last_run": MONITORING_STATE["last_run"],
+        "next_run": MONITORING_STATE["next_run"]
+    })
+
+
+@app.route('/api/monitoring/start', methods=['POST'])
+def monitoring_start():
+    """Start background monitoring every 60 minutes."""
+    data = request.json or {}
+    hotel_name = data.get('hotel_name')
+    dates = data.get('dates')
+    paid_price = float(data.get('paid_price', 0))
+    booking_id = data.get('booking_id', '')
+
+    if not all([hotel_name, dates, paid_price]):
+        return jsonify({"error": "Missing required fields for monitoring (hotel_name, dates, paid_price)"}), 400
+
+    MONITORING_STATE["target"] = {
+        "hotel_name": hotel_name,
+        "dates": dates,
+        "paid_price": paid_price,
+        "booking_id": booking_id
+    }
+
+    if MONITORING_STATE["enabled"]:
+        return jsonify({
+            "status": "already_running",
+            "message": "Monitoring already enabled",
+            "target": MONITORING_STATE["target"]
+        })
+
+    MONITORING_STATE["enabled"] = True
+    MONITOR_STOP_EVENT.clear()
+
+    monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
+    MONITORING_STATE["thread"] = monitor_thread
+    monitor_thread.start()
+
+    log_activity("info", f"Monitoring enabled for {hotel_name} every 60 minutes", source="scheduler", hotel=hotel_name)
+
+    return jsonify({
+        "status": "started",
+        "message": "Monitoring started (60-minute interval)",
+        "target": MONITORING_STATE["target"]
+    })
+
+
+@app.route('/api/monitoring/stop', methods=['POST'])
+def monitoring_stop():
+    """Stop background monitoring safely."""
+    if not MONITORING_STATE["enabled"]:
+        return jsonify({"status": "already_stopped", "message": "Monitoring already disabled"})
+
+    MONITORING_STATE["enabled"] = False
+    MONITORING_STATE["next_run"] = None
+    MONITOR_STOP_EVENT.set()
+
+    thread = MONITORING_STATE.get("thread")
+    if thread and thread.is_alive():
+        thread.join(timeout=3)
+
+    log_activity("info", "Monitoring disabled", source="scheduler")
+
+    return jsonify({"status": "stopped", "message": "Monitoring stopped"})
 
 @app.route('/api/clear-history', methods=['POST'])
 def clear_history():

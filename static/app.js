@@ -3,13 +3,25 @@
 // Global state
 let currentSettings = {};
 let searchInProgress = false;
+let monitoringPollingTimer = null;
 
 // Initialize app
 document.addEventListener("DOMContentLoaded", function () {
   loadSettings();
   loadHistory();
+  loadCredentials();
+  loadMonitoringStatus();
+  loadActivityLog();
   setupEventListeners();
   checkStatus();
+
+  if (monitoringPollingTimer) {
+    clearInterval(monitoringPollingTimer);
+  }
+  monitoringPollingTimer = setInterval(() => {
+    loadMonitoringStatus();
+    loadActivityLog();
+  }, 15000);
 });
 
 // Setup event listeners
@@ -447,10 +459,11 @@ async function loadCredentials() {
 function updateCredentialStatus(count) {
   const badge = document.getElementById("cred_status_indicator");
   if (count > 0) {
-    badge.textContent = `✓ ${count} Account${count !== 1 ? "s" : ""} Connected`;
+    badge.innerHTML = `<i class="material-icons icon-small">verified_user</i>${count} Account${count !== 1 ? "s" : ""} Connected`;
     badge.className = "cred-badge set";
   } else {
-    badge.textContent = "🔓 No Credentials";
+    badge.innerHTML =
+      '<i class="material-icons icon-small">lock_open</i>No Credentials';
     badge.className = "cred-badge not-set";
   }
 }
@@ -458,14 +471,14 @@ function updateCredentialStatus(count) {
 // Toggle password visibility
 function togglePasswordVisibility() {
   const passwordInput = document.getElementById("cred_password");
-  const toggleBtn = document.querySelector(".toggle-password");
+  const toggleIcon = document.querySelector(".toggle-password .material-icons");
 
   if (passwordInput.type === "password") {
     passwordInput.type = "text";
-    toggleBtn.textContent = "🙈";
+    if (toggleIcon) toggleIcon.textContent = "visibility_off";
   } else {
     passwordInput.type = "password";
-    toggleBtn.textContent = "👁️";
+    if (toggleIcon) toggleIcon.textContent = "visibility";
   }
 }
 
@@ -553,15 +566,6 @@ async function deleteCredential(website) {
   }
 }
 
-// Call loadCredentials on page load
-document.addEventListener("DOMContentLoaded", function () {
-  loadSettings();
-  loadHistory();
-  loadCredentials();
-  setupEventListeners();
-  checkStatus();
-});
-
 // Check system status
 async function checkStatus() {
   try {
@@ -573,5 +577,138 @@ async function checkStatus() {
     }
   } catch (error) {
     console.error("Error checking status:", error);
+  }
+}
+
+async function toggleMonitoring(enabled) {
+  const hotelName = document.getElementById("hotel_name").value;
+  const dates = document.getElementById("dates").value;
+  const paidPrice = document.getElementById("paid_price").value;
+  const bookingId = document.getElementById("booking_id").value;
+  const statusText = document.getElementById("monitoring_status");
+
+  try {
+    if (enabled) {
+      if (!hotelName || !dates || !paidPrice) {
+        showStatus(
+          "Please fill Hotel, Dates, and Paid Price before starting monitoring",
+          "error",
+          "search_status",
+        );
+        document.getElementById("monitoring_toggle").checked = false;
+        return;
+      }
+
+      const response = await fetch("/api/monitoring/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hotel_name: hotelName,
+          dates: dates,
+          paid_price: paidPrice,
+          booking_id: bookingId,
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to start monitoring");
+      }
+
+      statusText.textContent = "Monitoring is running every 60 minutes";
+      addLog("Background monitoring started", "success");
+      showStatus("Monitoring started", "success", "search_status");
+    } else {
+      const response = await fetch("/api/monitoring/stop", {
+        method: "POST",
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to stop monitoring");
+      }
+
+      statusText.textContent = "Monitoring is stopped";
+      addLog("Background monitoring stopped", "warning");
+      showStatus("Monitoring stopped", "success", "search_status");
+    }
+
+    loadMonitoringStatus();
+    loadActivityLog();
+  } catch (error) {
+    console.error("Monitoring toggle error:", error);
+    addLog(`Monitoring error: ${error.message}`, "error");
+    showStatus(error.message, "error", "search_status");
+    document.getElementById("monitoring_toggle").checked = !enabled;
+  }
+}
+
+async function loadMonitoringStatus() {
+  const toggle = document.getElementById("monitoring_toggle");
+  const statusText = document.getElementById("monitoring_status");
+  if (!toggle || !statusText) return;
+
+  try {
+    const response = await fetch("/api/monitoring/status");
+    const status = await response.json();
+
+    toggle.checked = Boolean(status.enabled);
+
+    if (status.enabled) {
+      const nextRun = status.next_run
+        ? new Date(status.next_run).toLocaleString()
+        : "calculating next run...";
+      statusText.textContent = `Monitoring active • Next check: ${nextRun}`;
+    } else {
+      statusText.textContent = "Monitoring is stopped";
+    }
+  } catch (error) {
+    console.error("Failed to load monitoring status:", error);
+  }
+}
+
+async function loadActivityLog() {
+  const container = document.getElementById("activity_log");
+  if (!container) return;
+
+  try {
+    const response = await fetch("/api/activity-log?limit=60");
+    const logs = await response.json();
+
+    if (!Array.isArray(logs) || logs.length === 0) {
+      container.innerHTML = '<div class="placeholder">No activity yet</div>';
+      return;
+    }
+
+    const rows = logs
+      .slice()
+      .reverse()
+      .map((entry) => {
+        const ts = entry.timestamp
+          ? new Date(entry.timestamp).toLocaleString()
+          : "-";
+        const price =
+          entry.current_price !== null && entry.current_price !== undefined
+            ? `$${Number(entry.current_price).toFixed(2)}`
+            : "-";
+        const statusClass = `status-chip ${entry.status || "info"}`;
+        return `
+          <div class="activity-row">
+            <div class="activity-meta">
+              <span class="activity-time">${ts}</span>
+              <span class="${statusClass}">${entry.status || "info"}</span>
+            </div>
+            <div class="activity-message">${entry.message || "-"}</div>
+            <div class="activity-price">Price: ${price}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    container.innerHTML = rows;
+  } catch (error) {
+    console.error("Failed to load activity log:", error);
+    container.innerHTML =
+      '<div class="placeholder">Failed to load activity log</div>';
   }
 }
