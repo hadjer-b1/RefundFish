@@ -1,0 +1,87 @@
+{
+  "booking": {
+    "type": "object",
+    "required": ["hotel_name", "dates", "paid_price"],
+    "properties": {
+      "hotel_name": {
+        "type": "string",
+        "minLength": 1,
+        "description": " Hotel name"
+      },
+      "dates": {
+        "type": "string",
+        "pattern": "^[A-Za-z]+ \\d+-\\d+ \\d{4}$",
+        "description": " Date range (e.g., 'May 15-16 2026')"
+      },
+      "paid_price": {
+        "type": "number",
+        "minimum": 0,
+        "description": " Price paid in USD"
+      }
+    }
+  },
+
+  "price_result": {
+    "type": "object",
+    "required": ["hotel_name", "current_price", "timestamp"],
+    "properties": {
+      "hotel_name": {
+        "type": "string"
+      },
+      "dates": {
+        "type": "string"
+      },
+      "platform": {
+        "type": "string",
+        "enum": ["google_hotels", "booking", "expedia"]
+      },
+      "current_price": {
+        "type": "number",
+        "minimum": 0
+      },
+      "currency": {
+        "type": "string",
+        "default": "USD"
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time"
+      }
+    }
+  },
+
+  "decision_result": {
+    "type": "object",
+    "required": ["should_rebook", "savings"],
+    "properties": {
+      "should_rebook": {
+        "type": "boolean"
+      },
+      "savings": {
+        "type": "number"
+      },
+      "risk_score": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "recommendation": {
+        "type": "string",
+        "enum": ["SAFE_TO_REBOOK", "RISKY", "INSUFFICIENT_SAVINGS"]
+      },
+      "reasoning": {
+        "type": "string"
+      }
+    }
+  }
+}

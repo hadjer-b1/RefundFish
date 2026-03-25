@@ -1,0 +1,15 @@
+# RefundFish Project Dependencies
+# Python 3.8+
+
+# HTTP Request Library - Used for TinyFish API calls
+requests>=2.31.0
+
+# Environment Configuration
+python-dotenv>=1.0.0
+
+# Web Framework
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Encryption for Credential Storage
+cryptography>=41.0.0

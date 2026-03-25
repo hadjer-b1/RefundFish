@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RefundFish - AI Hotel Price Monitor</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Header -->
+      <header class="header">
+        <div class="header-content">
+          <div class="header-main">
+            <div class="logo-title">
+             <img src="/static/logo.png" alt="RefundFish Logo" class="logo"  />
+            </div>
+            <p>AI-Powered Hotel Price Monitoring & Auto-Refund System</p>
+          </div>
+
+          <!-- Quick Credential Status in Header -->
+          <div class="header-cred-status">
+            <span id="cred_status_indicator" class="cred-badge not-set"
+              >🔓 No Credentials</span
+            >
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <div class="main-content">
+        <!-- Left Panel: Search & Settings -->
+        <div class="left-panel">
+          <!-- Credentials Section - FIRST & PROMINENT -->
+          <section class="credentials-section prominent">
+            <div class="credentials-header">
+              <h2>🔐 Login Credentials</h2>
+              <span id="cred_saved_count" class="badge" style="display: none"
+                >Saved</span
+              >
+            </div>
+            <p class="credentials-note">
+              ✓ Passwords are encrypted and stored securely
+            </p>
+
+            <div class="credentials-form">
+              <div class="form-group">
+                <label>Which website?</label>
+                <select id="credential_website" class="form-control">
+                  <option value="">-- Select a website --</option>
+                  <option value="booking.com">Booking.com</option>
+                  <option value="google-hotels">Google Hotels</option>
+                  <option value="hotels.com">Hotels.com</option>
+                  <option value="expedia.com">Expedia</option>
+                  <option value="kayak.com">Kayak</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Email or Username</label>
+                <input
+                  type="email"
+                  id="cred_username"
+                  placeholder="your@email.com"
+                  class="form-control"
+                />
+              </div>
+
+              <div class="form-group">
+                <label>Password (or leave blank if using 2FA)</label>
+                <div class="password-input-wrapper">
+                  <input
+                    type="password"
+                    id="cred_password"
+                    placeholder="Optional - if not using 2FA"
+                    class="form-control"
+                  />
+                  <button
+                    type="button"
+                    class="toggle-password"
+                    onclick="togglePasswordVisibility()"
+                  >
+                    👁️
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>2FA/Verification Code (if website asks for it)</label>
+                <input
+                  type="text"
+                  id="cred_2fa_code"
+                  placeholder="e.g., 123456 (leave blank if not using 2FA)"
+                  class="form-control"
+                  maxlength="10"
+                />
+                <small class="hint-text"
+                  >📧 Check your email for the verification code if Booking.com
+                  sent one</small
+                >
+              </div>
+
+              <button class="btn btn-danger" onclick="saveCredentials()">
+                💾 Save
+              </button>
+            </div>
+
+            <div id="saved_creds" class="saved-credentials">
+              <h3>✓ Saved Credentials</h3>
+              <div id="cred_list" class="cred-list"></div>
+            </div>
+
+            <div id="cred_status_message" class="status-message"></div>
+          </section>
+
+          <!-- Auto-Fetch Reservations Section -->
+          <section class="fetch-section">
+            <h2>📥 Auto-Fetch Your Bookings</h2>
+            <p class="section-note">
+              Uses your saved credentials to automatically load all your
+              reservations
+            </p>
+
+            <div class="form-group">
+              <label>Select Website</label>
+              <select id="fetch_website" class="form-control">
+                <option value="booking.com">Booking.com</option>
+                <option value="google-hotels">Google Hotels</option>
+                <option value="hotels.com">Hotels.com</option>
+                <option value="expedia.com">Expedia</option>
+                <option value="kayak.com">Kayak</option>
+              </select>
+            </div>
+
+            <button
+              id="fetch_btn"
+              class="btn btn-success"
+              onclick="fetchReservations()"
+            >
+              🔗 Fetch My Reservations
+            </button>
+
+            <div id="fetch_status" class="status-message"></div>
+
+            <div id="reservations_list" style="display: none; margin-top: 15px">
+              <label>Your Reservations</label>
+              <select
+                id="reservation_select"
+                class="form-control"
+                onchange="selectReservation()"
+              >
+                <option value="">-- Select a reservation --</option>
+              </select>
+            </div>
+          </section>
+
+          <!-- Manual Search Section -->
+          <section class="search-section">
+            <h2>🔍 Or Search Manually</h2>
+            <p class="section-note">Enter hotel details manually</p>
+
+            <div class="form-group">
+              <label>Hotel Name</label>
+              <input
+                type="text"
+                id="hotel_name"
+                placeholder="e.g., Hilton Dubai"
+                value="Hilton Dubai"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Check-in to Check-out (Dates)</label>
+              <input
+                type="text"
+                id="dates"
+                placeholder="e.g., May 15-16 2026"
+                value="May 15-16 2026"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Price Paid ($)</label>
+              <input
+                type="number"
+                id="paid_price"
+                placeholder="Amount paid"
+                value="194"
+                min="1"
+                step="0.01"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Booking ID (for auto-cancel)</label>
+              <input
+                type="text"
+                id="booking_id"
+                placeholder="e.g., BK123456789"
+                value=""
+              />
+            </div>
+
+            <button
+              id="search_btn"
+              class="btn btn-primary"
+              onclick="searchHotel()"
+            >
+              🔍 Search Price
+            </button>
+
+            <div id="search_status" class="status-message"></div>
+          </section>
+
+          <!-- Settings Section -->
+          <section class="settings-section">
+            <h2>⚙️ Settings</h2>
+
+            <div class="settings-group">
+              <label>Minimum Savings to Refund ($)</label>
+              <div class="slider-container">
+                <input
+                  type="range"
+                  id="min_savings"
+                  min="0"
+                  max="100"
+                  value="10"
+                  class="slider"
+                />
+                <span id="savings_value">$10</span>
+              </div>
+            </div>
+
+            <div class="settings-group">
+              <label>Search Website</label>
+              <select id="selected_website" class="form-control">
+                <option value="booking.com">Booking.com</option>
+                <option value="google-hotels">Google Hotels</option>
+                <option value="hotels.com">Hotels.com</option>
+                <option value="expedia.com">Expedia</option>
+                <option value="kayak.com">Kayak</option>
+              </select>
+            </div>
+
+            <div class="settings-group checkbox">
+              <input type="checkbox" id="refund_enabled" checked />
+              <label for="refund_enabled">Enable Refund</label>
+            </div>
+
+            <div class="settings-group checkbox">
+              <input type="checkbox" id="auto_refund" />
+              <label for="auto_refund">Auto-Refund (when threshold met)</label>
+            </div>
+
+            <button class="btn btn-secondary" onclick="saveSettings()">
+              Save Settings
+            </button>
+          </section>
+
+          <!-- History Section -->
+          <section class="history-section">
+            <h2>📋 Search History</h2>
+            <div id="history_list" class="history-list"></div>
+            <button class="btn btn-small" onclick="clearHistory()">
+              Clear History
+            </button>
+          </section>
+        </div>
+
+        <!-- Right Panel: Results & Logs -->
+        <div class="right-panel">
+          <!-- Results Section -->
+          <section class="results-section">
+            <h2>Results</h2>
+            <div id="results" class="results-container">
+              <div class="placeholder">Search for a hotel to see results</div>
+            </div>
+          </section>
+
+          <!-- Real-time Logs -->
+          <section class="logs-section">
+            <h2>📊 Real-time Activity</h2>
+            <div id="logs" class="logs-container"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Status Bar -->
+      <footer class="status-bar">
+        <div id="status_indicator" class="status-dot"></div>
+        <span id="status_text">Ready</span>
+      </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
