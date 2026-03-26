@@ -10,6 +10,7 @@ python-dotenv>=1.0.0
 # Web Framework
 flask>=3.0.0
 flask-cors>=4.0.0
+gunicorn>=22.0.0
 
 # Encryption for Credential Storage
 cryptography>=41.0.0

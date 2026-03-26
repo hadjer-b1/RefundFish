@@ -1289,5 +1289,7 @@ def delete_credentials(website):
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    logger.info("Starting RefundFish Web UI on http://localhost:5000")
-    app.run(debug=False, host='localhost', port=5000, use_reloader=False)
+    host = os.getenv('HOST', '0.0.0.0')
+    port = int(os.getenv('PORT', '5000'))
+    logger.info(f"Starting RefundFish Web UI on http://{host}:{port}")
+    app.run(debug=False, host=host, port=port, use_reloader=False)
