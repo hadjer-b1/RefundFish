@@ -592,9 +592,9 @@ async function toggleMonitoring(enabled) {
 
   try {
     if (enabled) {
-      if (!bookingUrl || !targetPrice) {
+      if (!targetPrice || (!bookingUrl && (!hotelName || !dates))) {
         showStatus(
-          "Please fill Booking URL and Target Price before starting Live Monitor",
+          "Provide Target Price, and either Booking URL OR Hotel Name + Dates",
           "error",
           "search_status",
         );

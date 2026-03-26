@@ -643,7 +643,7 @@ def monitoring_loop():
 
 
 def run_live_monitor_check(source: str = "live-monitor"):
-    """Execute one live monitor cycle using session cookies and booking URL."""
+    """Execute one live monitor cycle using either booking URL or hotel/date query."""
     target = LIVE_MONITOR_STATE.get("target")
     if not target:
         return None, "Live monitor target is not configured"
@@ -656,8 +656,98 @@ def run_live_monitor_check(source: str = "live-monitor"):
     booking_id = target.get("booking_id", "")
     website = target.get("website") or load_settings().get("selected_website", "booking.com")
 
-    if not booking_url or target_price <= 0:
-        return None, "Missing booking_url or target_price"
+    if target_price <= 0:
+        return None, "Missing target_price"
+
+    if not booking_url:
+        if not hotel_name or not dates:
+            return None, "Missing hotel_name/dates when booking_url is not provided"
+
+        LIVE_MONITOR_STATE["last_run"] = datetime.now().isoformat()
+        LIVE_MONITOR_STATE["next_run"] = (datetime.now() + timedelta(seconds=LIVE_MONITOR_INTERVAL_SECONDS)).isoformat()
+
+        success, message, recipient_email, _ = execute_auto_refund_sequence(
+            website=website,
+            hotel_name=hotel_name,
+            dates=dates,
+            booking_id=booking_id,
+            current_price=target_price,
+            savings=0,
+            hotel_url="",
+            target_price=target_price,
+            preview_only=False,
+        )
+
+        auto_favorited = bool(success and ("added" in message.lower() or "saved" in message.lower()))
+        LIVE_MONITOR_STATE["price_drop_detected"] = auto_favorited
+        LIVE_MONITOR_STATE["last_live_price"] = target_price if auto_favorited else None
+        LIVE_MONITOR_STATE["last_star_rating"] = None
+        LIVE_MONITOR_STATE["last_vote_count"] = None
+        LIVE_MONITOR_STATE["good_price_recommended"] = auto_favorited
+
+        if auto_favorited:
+            LIVE_MONITOR_STATE["last_drop"] = {
+                "hotel_name": hotel_name,
+                "dates": dates,
+                "room_type": None,
+                "website": website,
+                "booking_id": booking_id,
+                "booking_url": "",
+                "target_price": target_price,
+                "paid_price": paid_price if paid_price > 0 else target_price,
+                "current_live_price": target_price,
+                "star_rating": None,
+                "vote_count": None,
+                "good_price_recommended": True,
+                "savings": 0,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        if success:
+            log_activity(
+                status="success",
+                source=source,
+                hotel=hotel_name,
+                current_price=target_price,
+                paid_price=target_price,
+                savings=0,
+                message=f"Auto wishlist check complete: {message}",
+                dates=dates,
+                room_type=None,
+            )
+            return {
+                "status": "success",
+                "message": message,
+                "current_live_price": target_price if auto_favorited else None,
+                "star_rating": None,
+                "vote_count": None,
+                "good_price_recommended": auto_favorited,
+                "target_price": target_price,
+                "price_drop_detected": auto_favorited,
+                "last_drop": LIVE_MONITOR_STATE.get("last_drop"),
+            }, None
+
+        log_activity(
+            status="error",
+            source=source,
+            hotel=hotel_name,
+            current_price=None,
+            paid_price=target_price,
+            savings=0,
+            message=f"Auto wishlist check failed: {message}",
+            dates=dates,
+            room_type=None,
+        )
+        return {
+            "status": "error",
+            "message": message,
+            "star_rating": None,
+            "vote_count": None,
+            "good_price_recommended": False,
+            "target_price": target_price,
+            "current_live_price": None,
+            "price_drop_detected": False,
+        }, None
 
     check_result = live_monitor_agent.fetch_live_price(
         booking_url=booking_url,
@@ -1004,7 +1094,7 @@ def monitoring_status():
 
 @app.route('/api/monitoring/start', methods=['POST'])
 def monitoring_start():
-    """Start Hybrid Live Monitor using session cookies and booking URL."""
+    """Start Live Monitor using booking URL or hotel/date query."""
     data = request.json or {}
     hotel_name = data.get('hotel_name') or ''
     dates = data.get('dates') or ''
@@ -1014,8 +1104,11 @@ def monitoring_start():
     booking_id = data.get('booking_id', '')
     website = data.get('website') or load_settings().get('selected_website', 'booking.com')
 
-    if not booking_url or target_price <= 0:
-        return jsonify({"error": "Missing required fields for Live Monitor (booking_url, target_price)"}), 400
+    if target_price <= 0:
+        return jsonify({"error": "Missing required field: target_price"}), 400
+
+    if not booking_url and not all([hotel_name, dates]):
+        return jsonify({"error": "Provide booking_url OR hotel_name + dates"}), 400
 
     LIVE_MONITOR_STATE["target"] = {
         "hotel_name": hotel_name,

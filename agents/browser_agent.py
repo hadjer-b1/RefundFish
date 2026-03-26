@@ -886,19 +886,20 @@ def manage_favorites(website: str, username: str, password: str = None,
         target_url = f"{base_url}{url_filters}"
     
     query_text = hotel_name_query or "best value hotels"
+    effective_price_ceiling = min(250.0, float(target_price)) if target_price and float(target_price) > 0 else 250.0
 
     extraction_goal = f"""
     Use existing authenticated cookies/session cookies only. Do not logout and do not switch accounts.
     Do not click any Heart/Save buttons in this step.
 
-    PRICE CEILING RULE: Only extract prices under $250. If you see $250 or higher, SKIP that hotel.
+    PRICE CEILING RULE: Only extract prices under ${effective_price_ceiling:.2f}. If you see a higher price, SKIP that hotel.
 
     If URL points to a specific hotel page, evaluate that listing and nearby alternatives.
     If no specific hotel is provided, search Booking.com for: {query_text} with dates: {dates or 'flexible dates'}.
 
     Include ONLY hotels with rating 3.5 or higher.
     Prioritize hotels with deal indicators like "Deal", "Discounted", or "Limited time deal".
-    Extract FINAL payable price (including taxes/fees when visible). IGNORE any price >= $250.
+    Extract FINAL payable price (including taxes/fees when visible). IGNORE any price >= ${effective_price_ceiling:.2f}.
     Ignore strikethrough/original prices.
     Keep all prices in one consistent currency; target currency is {normalized_currency}.
 
@@ -922,17 +923,17 @@ def manage_favorites(website: str, username: str, password: str = None,
                 "action": "none"
             }
 
-        raw_candidates = _parse_deal_candidates(response_text, fallback_currency=normalized_currency, max_price_ceiling=250.0)
+        raw_candidates = _parse_deal_candidates(response_text, fallback_currency=normalized_currency, max_price_ceiling=effective_price_ceiling)
         ranked_candidates = _filter_and_rank_deals(
             raw_candidates,
             min_rating=3.5,
-            max_price_for_mid_rating=250.0,
+            max_price_for_mid_rating=effective_price_ceiling,
             preferred_currency=normalized_currency,
         )
 
         shortlisted = ranked_candidates[:max(1, top_n)]
         if not shortlisted:
-            logger.info("No realistic 3.5+ deals found under $250 ceiling. Searching for better deals...")
+            logger.info(f"No realistic 3.5+ deals found under ${effective_price_ceiling:.2f}. Searching for better deals...")
             return {
                 "success": False,
                 "message": "Searching for better deals...",
@@ -943,7 +944,7 @@ def manage_favorites(website: str, username: str, password: str = None,
                 "extracted_deals": [],
             }
 
-        preview_message = f"Found {len(shortlisted)} deal(s) under $250. Review before hearting."
+        preview_message = f"Found {len(shortlisted)} deal(s) under ${effective_price_ceiling:.2f}. Review before hearting."
         if preview_only:
             logger.info(preview_message)
             minimalist_deals = [
@@ -967,11 +968,21 @@ def manage_favorites(website: str, username: str, password: str = None,
 
         heart_goal = f"""
         Use existing authenticated cookies/session. Do not logout and do not switch accounts.
-        Add these hotels to Favorites by clicking the Heart/Save icon:
+        IMPORTANT: Ensure actions are on the currently logged-in account for username/email: {username}
+
+        Candidates to add to favorites:
         {json.dumps(shortlisted)}
 
-        For each attempt return one line exactly:
-        ADDED: <hotel_name> | PRICE: <currency><price> | RATING: <rating> | STATUS: <SUCCESS|FAILED>
+        For each candidate:
+        1) Open candidate hotel_url if available; if missing, search Booking.com by hotel_name and dates ({dates or 'flexible dates'}).
+        2) Click Heart/Save button.
+        3) Verify button state changed to Saved/Heart filled (or appears in saved/wishlist indicator).
+
+        Return ONLY JSON array with keys exactly:
+        hotel_name, hotel_url, status, verified_saved, observed_state
+
+        status must be SUCCESS or FAILED.
+        verified_saved must be true only when page confirms saved state.
         """
 
         heart_payload = {
@@ -1001,20 +1012,56 @@ def manage_favorites(website: str, username: str, password: str = None,
             }
 
         added_hotels: List[Dict[str, Any]] = []
-        for candidate in shortlisted:
-            hotel_name = candidate.get("hotel_name", "Unknown Hotel")
-            price = float(candidate.get("final_price", 0.0))
-            rating = float(candidate.get("rating", 0.0))
-            success_pattern = re.search(
-                rf"ADDED\s*:\s*{re.escape(hotel_name)}[\s\S]*?STATUS\s*:\s*SUCCESS",
-                heart_response,
-                re.IGNORECASE,
-            )
-            if success_pattern:
-                log_line = f"[{datetime.now().isoformat()}] | Found: {hotel_name} | Rating: {rating:.1f} | Price: {normalized_currency} {price:.2f} | Status: Added to Favs ✅"
-                logger.info(log_line)
-                logger.info(f"Successfully added {hotel_name} to Favorites at {normalized_currency} {price:.2f} (3.5+ Rating detected).")
-                added_hotels.append(candidate)
+        parsed_results = _extract_json_array(heart_response)
+
+        if parsed_results:
+            for candidate in shortlisted:
+                candidate_name = str(candidate.get("hotel_name", "Unknown Hotel")).strip().lower()
+                candidate_url = str(candidate.get("hotel_url", "")).strip()
+
+                matched = None
+                for result_item in parsed_results:
+                    if not isinstance(result_item, dict):
+                        continue
+                    result_name = str(result_item.get("hotel_name", "")).strip().lower()
+                    result_url = str(result_item.get("hotel_url", "")).strip()
+                    if (candidate_url and result_url and candidate_url == result_url) or (candidate_name and result_name and candidate_name in result_name):
+                        matched = result_item
+                        break
+
+                if not matched:
+                    continue
+
+                status_ok = str(matched.get("status", "")).strip().upper() == "SUCCESS"
+                verified_saved = bool(matched.get("verified_saved"))
+                if status_ok and verified_saved:
+                    hotel_name = candidate.get("hotel_name", "Unknown Hotel")
+                    price = float(candidate.get("final_price", 0.0))
+                    rating = float(candidate.get("rating", 0.0))
+                    log_line = f"[{datetime.now().isoformat()}] | Found: {hotel_name} | Rating: {rating:.1f} | Price: {normalized_currency} {price:.2f} | Status: Added to Favs ✅"
+                    logger.info(log_line)
+                    logger.info(f"Successfully added {hotel_name} to Favorites at {normalized_currency} {price:.2f} (3.5+ Rating detected).")
+                    added_hotels.append(candidate)
+        else:
+            for candidate in shortlisted:
+                hotel_name = candidate.get("hotel_name", "Unknown Hotel")
+                price = float(candidate.get("final_price", 0.0))
+                rating = float(candidate.get("rating", 0.0))
+                success_pattern = re.search(
+                    rf"{re.escape(hotel_name)}[\s\S]*?(SUCCESS|SAVED)",
+                    heart_response,
+                    re.IGNORECASE,
+                )
+                verified_pattern = re.search(
+                    r"(verified_saved\s*[:=]\s*true|saved\s*state|heart\s*filled)",
+                    heart_response,
+                    re.IGNORECASE,
+                )
+                if success_pattern and verified_pattern:
+                    log_line = f"[{datetime.now().isoformat()}] | Found: {hotel_name} | Rating: {rating:.1f} | Price: {normalized_currency} {price:.2f} | Status: Added to Favs ✅"
+                    logger.info(log_line)
+                    logger.info(f"Successfully added {hotel_name} to Favorites at {normalized_currency} {price:.2f} (3.5+ Rating detected).")
+                    added_hotels.append(candidate)
 
         if added_hotels:
             top_hotel = added_hotels[0]
