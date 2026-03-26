@@ -45,6 +45,7 @@ env/
 # Local Logs & Data
 data/logs/
 data/**/*.log
+data/settings.json
 *.log
 logs/
 
