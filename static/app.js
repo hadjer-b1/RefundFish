@@ -133,13 +133,15 @@ async function searchHotel() {
 
       loadHistory();
     } else {
-      showStatus("❌ " + result.error, "error");
-      addLog(result.error, "error");
+      const errorMsg = result.details || result.error || "Unknown error occurred";
+      showStatus("❌ " + errorMsg, "error");
+      addLog(errorMsg, "error");
     }
   } catch (error) {
     console.error("Search error:", error);
-    showStatus("Error: " + error.message, "error");
-    addLog("Search failed: " + error.message, "error");
+    const errorMsg = `Search failed: ${error.message || "JSON parse error - service may be unavailable"}`;
+    showStatus(errorMsg, "error");
+    addLog(errorMsg, "error");
   } finally {
     searchInProgress = false;
     document.getElementById("search_btn").disabled = false;

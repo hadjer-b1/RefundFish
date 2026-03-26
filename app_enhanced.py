@@ -134,11 +134,12 @@ def search_hotel():
         
         if current_price is None:
             return jsonify({
-                "error": "Could not fetch price - TinyFish timeout or error",
-                "status": "failed",
+                "error": "Could not fetch price - TinyFish service unavailable",
+                "details": "The price search service is currently unavailable. Please check https://tinyfish.ai for service status and try again shortly.",
+                "status": "service_unavailable",
                 "hotel": hotel_name,
                 "dates": dates
-            }), 500
+            }), 503
         
         # Step 1: Analyze refund opportunity
         should_rebook, savings = evaluate_refund_opportunity(current_price, paid_price)

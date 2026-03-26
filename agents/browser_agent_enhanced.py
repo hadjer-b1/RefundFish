@@ -58,6 +58,13 @@ def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
     try:
         logger.debug("Calling TinyFish price search...")
         response = requests.post(url, headers=headers, json=payload, timeout=120)
+        
+        # Check for service unavailability before parsing
+        if response.status_code == 503:
+            logger.error("❌ TinyFish API is currently unavailable (503)")
+            logger.info("📋 Please check: https://tinyfish.ai for service status")
+            return None
+        
         response.raise_for_status()
         
         response_text = response.text
@@ -72,13 +79,22 @@ def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
         return None
         
     except requests.exceptions.Timeout:
-        logger.error("❌ TinyFish timeout - search took too long")
+        logger.error("❌ TinyFish timeout - service is slow or unresponsive (>120 seconds)")
+        logger.info("📋 The TinyFish API may be down. Check https://tinyfish.ai")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"❌ TinyFish connection error - service unreachable")
+        logger.debug(f"Connection details: {e}")
+        logger.info("📋 The TinyFish API may be down. Check https://tinyfish.ai")
         return None
     except requests.exceptions.HTTPError as e:
-        if "403" in str(e):
+        status = getattr(e.response, 'status_code', 'unknown')
+        if status == 403:
             logger.error("❌ 403 Forbidden - Check TinyFish API key at https://tinyfish.ai")
+        elif status == 503:
+            logger.error("❌ TinyFish API service unavailable (503)")
         else:
-            logger.error(f"❌ HTTP Error: {e}")
+            logger.error(f"❌ HTTP Error {status}: {e}")
         return None
     except Exception as e:
         logger.error(f"❌ TinyFish error: {e}")
