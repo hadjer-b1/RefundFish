@@ -83,3 +83,9 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # ================================
 ENABLE_CACHE = os.getenv("ENABLE_CACHE", "true").lower() == "true"
 CACHE_EXPIRY_MINUTES = int(os.getenv("CACHE_EXPIRY_MINUTES", "30"))  # صلاحية الذاكرة المؤقتة
+
+# ================================
+# MOCK MODE - تشغيل وضع محاكاة (عندما يكون TinyFish معطل)
+# ================================
+USE_MOCK_PRICES = os.getenv("USE_MOCK_PRICES", "false").lower() == "true"
+MOCK_PRICE_VARIANCE = float(os.getenv("MOCK_PRICE_VARIANCE", "0.25"))  # ±25% تباين السعر

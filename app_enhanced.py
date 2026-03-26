@@ -130,7 +130,7 @@ def search_hotel():
     
     try:
         logger.info(f"🔍 Searching: {hotel_name} for {dates}")
-        current_price = get_current_price(hotel_name, dates)
+        current_price = get_current_price(hotel_name, dates, original_price=paid_price)
         
         if current_price is None:
             return jsonify({

@@ -37,9 +37,44 @@ def extract_price(text: str) -> Optional[float]:
         return None
 
 
-def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
-    """Search for hotel price using TinyFish agent"""
+def generate_mock_price(original_price: float, hotel_name: str) -> float:
+    """Generate realistic mock price for testing when TinyFish is unavailable
+    
+    Returns a price ±10-30% of the original based on hotel name hash
+    """
+    from config.settings import MOCK_PRICE_VARIANCE
+    import hashlib
+    
+    # Use hotel name to seed price variance (consistent for same hotel)
+    hash_val = int(hashlib.md5(hotel_name.encode()).hexdigest(), 16)
+    variance = (hash_val % 100) / 100.0  # 0-1
+    
+    # Mix variance: some hotels cheaper (-%), some expensive (+%)
+    if variance < 0.5:
+        # Cheaper option (15-30% discount)
+        multiplier = 1 - (0.15 + (variance * 0.3))
+    else:
+        # More expensive option (10-25% markup)
+        multiplier = 1 + (0.10 + ((1 - variance) * 0.15))
+    
+    mock_price = original_price * multiplier
+    logger.info(f"🎭 MOCK MODE: ${original_price:.2f} → ${mock_price:.2f} (variance: {(multiplier-1)*100:+.1f}%)")
+    return round(mock_price, 2)
+
+
+def get_current_price(hotel_name: str, dates: str, original_price: Optional[float] = None) -> Optional[float]:
+    """Search for hotel price using TinyFish agent (or mock mode if TinyFish is unavailable)"""
+    from config.settings import USE_MOCK_PRICES
+    
     logger.info(f"🔍 Searching price: {hotel_name} for {dates}")
+    
+    # Check if mock mode is enabled
+    if USE_MOCK_PRICES:
+        if original_price:
+            return generate_mock_price(original_price, hotel_name)
+        else:
+            logger.warning("Mock mode enabled but no original_price provided - defaulting to $150")
+            return generate_mock_price(150.0, hotel_name)
     
     url = "https://agent.tinyfish.ai/v1/automation/run-sse"
     headers = {
@@ -63,6 +98,7 @@ def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
         if response.status_code == 503:
             logger.error("❌ TinyFish API is currently unavailable (503)")
             logger.info("📋 Please check: https://tinyfish.ai for service status")
+            logger.info("💡 Tip: Set USE_MOCK_PRICES=true in .env to test while TinyFish recovers")
             return None
         
         response.raise_for_status()
@@ -81,11 +117,13 @@ def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
     except requests.exceptions.Timeout:
         logger.error("❌ TinyFish timeout - service is slow or unresponsive (>120 seconds)")
         logger.info("📋 The TinyFish API may be down. Check https://tinyfish.ai")
+        logger.info("💡 Tip: Set USE_MOCK_PRICES=true in .env to test while TinyFish recovers")
         return None
     except requests.exceptions.ConnectionError as e:
         logger.error(f"❌ TinyFish connection error - service unreachable")
         logger.debug(f"Connection details: {e}")
         logger.info("📋 The TinyFish API may be down. Check https://tinyfish.ai")
+        logger.info("💡 Tip: Set USE_MOCK_PRICES=true in .env to test while TinyFish recovers")
         return None
     except requests.exceptions.HTTPError as e:
         status = getattr(e.response, 'status_code', 'unknown')
