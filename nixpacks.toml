@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["python311Full", "python311Packages.pip", "python311Packages.setuptools", "python311Packages.wheel", "gcc", "pkg-config", "openssl", "rustc", "cargo"]
+nixPkgs = ["python311Full", "python311Packages.pip", "python311Packages.setuptools", "python311Packages.wheel", "python311Packages.gunicorn", "gcc", "pkg-config", "openssl", "rustc", "cargo"]
 
 [phases.install]
 cmds = [
