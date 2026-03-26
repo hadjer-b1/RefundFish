@@ -583,15 +583,18 @@ async function checkStatus() {
 async function toggleMonitoring(enabled) {
   const hotelName = document.getElementById("hotel_name").value;
   const dates = document.getElementById("dates").value;
+  const bookingUrl = document.getElementById("booking_url").value;
+  const targetPrice = document.getElementById("target_price").value;
   const paidPrice = document.getElementById("paid_price").value;
   const bookingId = document.getElementById("booking_id").value;
+  const website = document.getElementById("selected_website").value;
   const statusText = document.getElementById("monitoring_status");
 
   try {
     if (enabled) {
-      if (!hotelName || !dates || !paidPrice) {
+      if (!bookingUrl || !targetPrice) {
         showStatus(
-          "Please fill Hotel, Dates, and Paid Price before starting monitoring",
+          "Please fill Booking URL and Target Price before starting Live Monitor",
           "error",
           "search_status",
         );
@@ -605,8 +608,11 @@ async function toggleMonitoring(enabled) {
         body: JSON.stringify({
           hotel_name: hotelName,
           dates: dates,
+          booking_url: bookingUrl,
+          target_price: targetPrice,
           paid_price: paidPrice,
           booking_id: bookingId,
+          website: website,
         }),
       });
       const result = await response.json();
@@ -615,9 +621,13 @@ async function toggleMonitoring(enabled) {
         throw new Error(result.error || "Failed to start monitoring");
       }
 
-      statusText.textContent = "Monitoring is running every 60 minutes";
-      addLog("Background monitoring started", "success");
-      showStatus("Monitoring started", "success", "search_status");
+      statusText.textContent = "Live Monitor is running with session cookies";
+      addLog("Live Monitor started", "success");
+      showStatus(
+        `Monitoring: ${hotelName || "Selected Hotel"} - Looking for price under $${Number(targetPrice).toFixed(2)}...`,
+        "success",
+        "search_status",
+      );
     } else {
       const response = await fetch("/api/monitoring/stop", {
         method: "POST",
@@ -628,9 +638,9 @@ async function toggleMonitoring(enabled) {
         throw new Error(result.error || "Failed to stop monitoring");
       }
 
-      statusText.textContent = "Monitoring is stopped";
-      addLog("Background monitoring stopped", "warning");
-      showStatus("Monitoring stopped", "success", "search_status");
+      statusText.textContent = "Live Monitor is stopped";
+      addLog("Live Monitor stopped", "warning");
+      showStatus("Live Monitor stopped", "success", "search_status");
     }
 
     loadMonitoringStatus();
@@ -646,6 +656,10 @@ async function toggleMonitoring(enabled) {
 async function loadMonitoringStatus() {
   const toggle = document.getElementById("monitoring_toggle");
   const statusText = document.getElementById("monitoring_status");
+  const liveStatusText = document.getElementById("live_status_text");
+  const currentLivePriceEl = document.getElementById("current_live_price");
+  const dropNotice = document.getElementById("price_drop_notice");
+  const executeBtn = document.getElementById("execute_rebook_btn");
   if (!toggle || !statusText) return;
 
   try {
@@ -654,16 +668,82 @@ async function loadMonitoringStatus() {
 
     toggle.checked = Boolean(status.enabled);
 
+    if (liveStatusText) {
+      liveStatusText.textContent = "Connected via Session Cookies";
+    }
+
+    if (currentLivePriceEl) {
+      currentLivePriceEl.value =
+        status.current_live_price !== null &&
+        status.current_live_price !== undefined
+          ? Number(status.current_live_price).toFixed(2)
+          : "";
+    }
+
+    if (dropNotice && executeBtn) {
+      if (status.price_drop_detected) {
+        dropNotice.style.display = "block";
+        executeBtn.style.display = "flex";
+      } else {
+        dropNotice.style.display = "none";
+        executeBtn.style.display = "none";
+      }
+    }
+
     if (status.enabled) {
-      const nextRun = status.next_run
-        ? new Date(status.next_run).toLocaleString()
-        : "calculating next run...";
-      statusText.textContent = `Monitoring active • Next check: ${nextRun}`;
+      const targetHotel = status.target?.hotel_name || "Selected Hotel";
+      const targetPrice = status.target?.target_price;
+      const targetText =
+        targetPrice !== null && targetPrice !== undefined
+          ? `$${Number(targetPrice).toFixed(2)}`
+          : "target";
+      statusText.textContent = `Monitoring: ${targetHotel} - Looking for price under ${targetText}...`;
     } else {
-      statusText.textContent = "Monitoring is stopped";
+      statusText.textContent = "Live Monitor is stopped";
     }
   } catch (error) {
     console.error("Failed to load monitoring status:", error);
+  }
+}
+
+async function executeAutoRebook() {
+  const payload = {
+    hotel_name: document.getElementById("hotel_name").value,
+    dates: document.getElementById("dates").value,
+    website: document.getElementById("selected_website").value,
+    booking_id: document.getElementById("booking_id").value,
+    booking_url: document.getElementById("booking_url").value,
+    current_live_price: document.getElementById("current_live_price").value,
+    paid_price: document.getElementById("paid_price").value,
+  };
+
+  try {
+    showStatus(
+      "Executing Smart Wishlist Hunter...",
+      "loading",
+      "search_status",
+    );
+    addLog("Executing Smart Wishlist Hunter action...", "info");
+
+    const response = await fetch("/api/live-monitor/execute-smart-wishlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+
+    if (!response.ok || result.status !== "success") {
+      throw new Error(result.error || "Smart Wishlist Hunter failed");
+    }
+
+    showStatus(`Success: ${result.message}`, "success", "search_status");
+    addLog(`Auto-rebook success: ${result.message}`, "success");
+    loadMonitoringStatus();
+    loadActivityLog();
+  } catch (error) {
+    console.error("Execute auto-rebook failed:", error);
+    showStatus(error.message, "error", "search_status");
+    addLog(`Auto-rebook failed: ${error.message}`, "error");
   }
 }
 
@@ -687,19 +767,18 @@ async function loadActivityLog() {
         const ts = entry.timestamp
           ? new Date(entry.timestamp).toLocaleString()
           : "-";
-        const price =
-          entry.current_price !== null && entry.current_price !== undefined
-            ? `$${Number(entry.current_price).toFixed(2)}`
-            : "-";
         const statusClass = `status-chip ${entry.status || "info"}`;
+        const formattedLine =
+          entry.log_line ||
+          entry.message ||
+          `[${ts}] | Hotel: ${entry.hotel || "N/A"} | Price: ${entry.current_price ? `$${Number(entry.current_price).toFixed(2)}` : "N/A"} | Status: ${entry.status || "info"}`;
         return `
           <div class="activity-row">
             <div class="activity-meta">
               <span class="activity-time">${ts}</span>
               <span class="${statusClass}">${entry.status || "info"}</span>
             </div>
-            <div class="activity-message">${entry.message || "-"}</div>
-            <div class="activity-price">Price: ${price}</div>
+            <div class="activity-message">${formattedLine}</div>
           </div>
         `;
       })

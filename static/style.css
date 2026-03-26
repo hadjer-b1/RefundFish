@@ -6,7 +6,7 @@
 
 /* Color Palette */
 :root {
-  --primary-blue: #1e3a8a; /* Trust Blue */
+  --primary-blue: #1e618a; /* Trust Blue */
   --success-green: #10b981; /* Emerald Green for savings */
   --light-bg: #f8f9fa; /* Off-White background */
   --white: #ffffff;
@@ -523,7 +523,7 @@ section h3 {
 }
 
 .log-entry.info {
-  color: var(--primary-blue);
+  color: #10b981;
 }
 
 .log-entry.warning {
@@ -963,10 +963,40 @@ section h3 {
 
 .status-chip.info {
   background: #dbeafe;
-  color: #1e40af;
+  color: #2f5cf1;
 }
 
 .status-chip.warning {
   background: #fef3c7;
   color: #92400e;
+}
+
+.live-status-box {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #7084ba;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.readonly-live {
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.price-drop-notice {
+  display: none;
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  font-weight: 600;
+}
+
+.hidden-2fa {
+  display: none;
 }

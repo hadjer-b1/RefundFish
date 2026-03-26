@@ -8,11 +8,25 @@ import requests
 import json
 import re
 import time
-from typing import Optional, Dict
+from datetime import datetime
+from typing import Optional, Dict, List, Any
 from config.settings import TINYFISH_API_KEY
 from config.logger import setup_logger
 
 logger = setup_logger("browser_agent")
+
+CURRENCY_TO_USD = {
+    "USD": 1.0,
+    "EUR": 1.09,
+    "GBP": 1.28,
+    "CAD": 0.74,
+    "AUD": 0.66,
+    "JPY": 0.0067,
+    "CHF": 1.12,
+    "AED": 0.27,
+    "SAR": 0.27,
+    "QAR": 0.27,
+}
 
 
 def call_tinyfish_api(url: str, headers: Dict, payload: Dict, timeout: int = 120, max_retries: int = 1) -> Optional[str]:
@@ -105,6 +119,252 @@ def extract_price(text: str) -> Optional[float]:
         return None
 
 
+def _extract_json_array(text: str) -> List[Dict[str, Any]]:
+    """Extract a JSON array from TinyFish free-form text response."""
+    if not isinstance(text, str):
+        return []
+
+    stripped = text.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        try:
+            parsed = json.loads(stripped)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            pass
+
+    array_match = re.search(r'(\[\s*\{[\s\S]*\}\s*\])', text)
+    if not array_match:
+        return []
+
+    try:
+        parsed = json.loads(array_match.group(1))
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _to_float(value: Any, strict_clean: bool = True, max_price_ceiling: float = 250.0) -> Optional[float]:
+    """Extract price as float. If strict_clean=True, extract only digits and divide by 100 (e.g. 12345 -> 123.45)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        price = float(value)
+        if price > max_price_ceiling:
+            return None
+        return price
+
+    if isinstance(value, str):
+        if strict_clean:
+            digits_only = ''.join(filter(str.isdigit, value))
+            if not digits_only:
+                return None
+            try:
+                as_int = int(digits_only)
+                if as_int > int(max_price_ceiling * 100):
+                    return None
+                price = float(as_int) / 100.0 if as_int > 99 else float(as_int)
+                return price if price <= max_price_ceiling else None
+            except (ValueError, ZeroDivisionError):
+                return None
+        else:
+            match = re.search(r'(\d+(?:,\d+)?(?:\.\d+)?)', value)
+            if not match:
+                return None
+            try:
+                price = float(match.group(1).replace(',', ''))
+                return price if price <= max_price_ceiling else None
+            except ValueError:
+                return None
+    return None
+
+
+def _normalize_currency(value: Any, fallback: str = "USD") -> str:
+    if not value:
+        return fallback
+    text = str(value).strip().upper()
+    if text in {"$", "USD", "US$"}:
+        return "USD"
+    if text in {"€", "EUR"}:
+        return "EUR"
+    if text in {"£", "GBP"}:
+        return "GBP"
+    if text in {"AED", "CAD", "JPY", "AUD", "SAR", "QAR", "CHF"}:
+        return text
+    return fallback
+
+
+def _convert_to_usd(amount: float, currency: str) -> Optional[float]:
+    normalized_currency = _normalize_currency(currency, fallback="USD")
+    rate = CURRENCY_TO_USD.get(normalized_currency)
+    if rate is None:
+        return None
+    return float(amount) * rate
+
+
+def _extract_currency_amount_pairs(text: str) -> List[Dict[str, Any]]:
+    if not isinstance(text, str):
+        return []
+
+    pairs: List[Dict[str, Any]] = []
+    symbol_pattern = re.compile(r'(?P<currency>\$|€|£)\s?(?P<amount>\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)')
+    code_pattern = re.compile(r'(?P<currency>USD|EUR|GBP|CAD|AUD|JPY|CHF|AED|SAR|QAR)\s?(?P<amount>\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)', re.IGNORECASE)
+
+    for match in symbol_pattern.finditer(text):
+        amount = _to_float(match.group("amount"), strict_clean=False, max_price_ceiling=100000.0)
+        if amount is None:
+            continue
+        pairs.append({
+            "currency": _normalize_currency(match.group("currency"), fallback="USD"),
+            "amount": float(amount),
+        })
+
+    for match in code_pattern.finditer(text):
+        amount = _to_float(match.group("amount"), strict_clean=False, max_price_ceiling=100000.0)
+        if amount is None:
+            continue
+        pairs.append({
+            "currency": _normalize_currency(match.group("currency"), fallback="USD"),
+            "amount": float(amount),
+        })
+
+    return pairs
+
+
+def _extract_usd_price_under_ceiling(text: str, max_price_ceiling: float = 250.0) -> Optional[float]:
+    pairs = _extract_currency_amount_pairs(text)
+    if not pairs:
+        return None
+
+    usd_candidates: List[float] = []
+    for pair in pairs:
+        usd_amount = _convert_to_usd(pair["amount"], pair["currency"])
+        if usd_amount is None:
+            continue
+        if usd_amount < max_price_ceiling:
+            usd_candidates.append(float(usd_amount))
+
+    if not usd_candidates:
+        return None
+
+    return round(min(usd_candidates), 2)
+
+
+def _parse_deal_candidates(response_text: str, fallback_currency: str = "USD", max_price_ceiling: float = 250.0) -> List[Dict[str, Any]]:
+    """Parse hotel candidates from TinyFish response. Strict $250 ceiling applied."""
+    candidates: List[Dict[str, Any]] = []
+    parsed_items = _extract_json_array(response_text)
+
+    if parsed_items:
+        for item in parsed_items:
+            if not isinstance(item, dict):
+                continue
+
+            hotel_name = (
+                item.get("hotel_name")
+                or item.get("name")
+                or item.get("hotel")
+                or "Unknown Hotel"
+            )
+            rating_val = item.get("rating") or item.get("star_rating") or item.get("stars")
+            rating = _to_float(rating_val, strict_clean=False, max_price_ceiling=10.0)
+            
+            price_val = (
+                item.get("final_price")
+                or item.get("price")
+                or item.get("total_price")
+                or item.get("nightly_price")
+            )
+            final_price = _to_float(price_val, strict_clean=True, max_price_ceiling=max_price_ceiling)
+
+            if final_price is None or final_price > max_price_ceiling:
+                logger.debug(f"Skipping {hotel_name}: price ${final_price} exceeds ${max_price_ceiling} ceiling")
+                continue
+
+            currency = _normalize_currency(item.get("currency"), fallback=fallback_currency)
+            usd_price = _convert_to_usd(float(final_price), currency)
+            if usd_price is None:
+                continue
+            if usd_price >= max_price_ceiling:
+                continue
+
+            has_deal_badge = bool(
+                item.get("has_deal_badge")
+                or item.get("deal_badge")
+                or item.get("discounted")
+                or item.get("is_deal")
+            )
+
+            candidates.append({
+                "hotel_name": str(hotel_name).strip(),
+                "rating": rating,
+                "final_price": round(float(usd_price), 2),
+                "currency": "USD",
+                "has_deal_badge": has_deal_badge,
+                "hotel_url": (item.get("hotel_url") or item.get("url") or "").strip(),
+                "room_type": (item.get("room_type") or "").strip(),
+            })
+
+    if candidates:
+        return candidates
+
+    fallback_hotel = re.search(r'HOTEL_NAME\s*:\s*(.+)', response_text, re.IGNORECASE)
+    fallback_rating = re.search(r'RATING\s*:\s*([0-9]+(?:\.[0-9]+)?)', response_text, re.IGNORECASE)
+    fallback_price = re.search(r'FINAL_PRICE\s*:\s*([^\n\r]+)', response_text, re.IGNORECASE)
+    fallback_currency_match = re.search(r'CURRENCY\s*:\s*([A-Za-z$€£]{1,4})', response_text, re.IGNORECASE)
+    fallback_deal = re.search(r'DEAL_BADGE\s*:\s*(YES|TRUE|1)', response_text, re.IGNORECASE)
+
+    if fallback_hotel and fallback_price:
+        parsed_price = _to_float(fallback_price.group(1), strict_clean=True, max_price_ceiling=100000.0)
+        fallback_currency_value = _normalize_currency(fallback_currency_match.group(1) if fallback_currency_match else fallback_currency, fallback=fallback_currency)
+        usd_price = _convert_to_usd(float(parsed_price), fallback_currency_value) if parsed_price is not None else None
+        if usd_price is not None and usd_price < max_price_ceiling:
+            candidates.append({
+                "hotel_name": fallback_hotel.group(1).strip(),
+                "rating": float(fallback_rating.group(1)) if fallback_rating else None,
+                "final_price": round(float(usd_price), 2),
+                "currency": "USD",
+                "has_deal_badge": bool(fallback_deal),
+                "hotel_url": "",
+                "room_type": "",
+            })
+
+    return candidates
+
+
+def _filter_and_rank_deals(candidates: List[Dict[str, Any]], min_rating: float = 3.5,
+                           max_price_for_mid_rating: float = 500.0,
+                           preferred_currency: str = "USD") -> List[Dict[str, Any]]:
+    """Apply rating/deal/price sanity checks and rank candidates."""
+    if not candidates:
+        return []
+
+    normalized_currency = _normalize_currency(preferred_currency, fallback="USD")
+    same_currency_candidates = [c for c in candidates if _normalize_currency(c.get("currency"), fallback=normalized_currency) == normalized_currency]
+    baseline = same_currency_candidates if same_currency_candidates else candidates
+
+    filtered: List[Dict[str, Any]] = []
+    for candidate in baseline:
+        rating = _to_float(candidate.get("rating"))
+        price = _to_float(candidate.get("final_price"))
+
+        if rating is None or rating < min_rating:
+            continue
+        if price is None:
+            continue
+        if min_rating <= rating < 4.0 and price > max_price_for_mid_rating:
+            continue
+
+        normalized = dict(candidate)
+        normalized["rating"] = float(rating)
+        normalized["final_price"] = float(price)
+        normalized["currency"] = _normalize_currency(candidate.get("currency"), fallback=normalized_currency)
+        normalized["has_deal_badge"] = bool(candidate.get("has_deal_badge"))
+        filtered.append(normalized)
+
+    filtered.sort(key=lambda item: (0 if item.get("has_deal_badge") else 1, item.get("final_price", float("inf"))))
+    return filtered
+
+
 def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
     """
     Search for hotel price using TinyFish agent
@@ -119,8 +379,19 @@ def get_current_price(hotel_name: str, dates: str) -> Optional[float]:
         "Content-Type": "application/json"
     }
     
-    # Simple goal as user described - agent handles the rest
-    goal = f"Go to Google. Search for {hotel_name} price for {dates}. Return only the price number."
+    goal = f"""
+    Search for hotel prices for {hotel_name} on dates {dates}.
+    Strict rules:
+    1) Prefer prices shown in USD ($).
+    2) If page currency is not USD, convert to USD before returning.
+    3) Ignore any price >= $250.
+    4) Ignore strike-through/original prices and taxes-only fragments.
+
+    Return plain text lines:
+    HOTEL_NAME: <name>
+    CURRENCY: <USD>
+    FINAL_PRICE_USD: <$123.45>
+    """
     
     payload = {
         "url": "https://www.google.com",
@@ -581,5 +852,221 @@ def rebook_with_new_price(website: str, username: str, password: str = None,
         return False
 
 
-__all__ = ['get_current_price', 'login_to_booking_site', 'fetch_reservations', 
-           'cancel_booking', 'rebook_with_new_price']
+def manage_favorites(website: str, username: str, password: str = None,
+                    hotel_url: str = "", target_price: float = 0,
+                    two_fa_code: str = None, hotel_name_query: str = "",
+                    dates: str = "", currency: str = "USD",
+                    preview_only: bool = True, top_n: int = 3) -> Dict:
+    """Search high-quality deals and manage favorites using existing cookies/session."""
+
+    logger.info("Running Smart Wishlist Hunter with rating/deal/price sanity filters")
+
+    if not login_to_booking_site(website, username, password, two_fa_code):
+        return {
+            "success": False,
+            "message": "Login failed",
+            "hotel_name": "",
+            "current_price": None,
+            "action": "none"
+        }
+
+    url = "https://agent.tinyfish.ai/v1/automation/run-sse"
+    headers = {
+        "X-API-Key": TINYFISH_API_KEY,
+        "Content-Type": "application/json"
+    }
+
+    normalized_currency = _normalize_currency(currency, fallback="USD")
+    
+    if hotel_url:
+        target_url = hotel_url
+    else:
+        base_url = "https://www.booking.com/searchresults.html"
+        url_filters = "&nflt=class%3D3%3Bclass%3D4%3Bprice%3DUSD-0-150-1"
+        target_url = f"{base_url}{url_filters}"
+    
+    query_text = hotel_name_query or "best value hotels"
+
+    extraction_goal = f"""
+    Use existing authenticated cookies/session cookies only. Do not logout and do not switch accounts.
+    Do not click any Heart/Save buttons in this step.
+
+    PRICE CEILING RULE: Only extract prices under $250. If you see $250 or higher, SKIP that hotel.
+
+    If URL points to a specific hotel page, evaluate that listing and nearby alternatives.
+    If no specific hotel is provided, search Booking.com for: {query_text} with dates: {dates or 'flexible dates'}.
+
+    Include ONLY hotels with rating 3.5 or higher.
+    Prioritize hotels with deal indicators like "Deal", "Discounted", or "Limited time deal".
+    Extract FINAL payable price (including taxes/fees when visible). IGNORE any price >= $250.
+    Ignore strikethrough/original prices.
+    Keep all prices in one consistent currency; target currency is {normalized_currency}.
+
+    Return ONLY a JSON array (no markdown), max 8 items, each object keys exactly:
+    hotel_name, rating, final_price, currency, has_deal_badge, hotel_url, room_type
+    """
+
+    payload = {
+        "url": target_url,
+        "goal": extraction_goal
+    }
+
+    try:
+        response_text = call_tinyfish_api(url, headers, payload, timeout=180, max_retries=1)
+        if response_text is None:
+            return {
+                "success": False,
+                "message": "TinyFish call failed",
+                "hotel_name": "",
+                "current_price": None,
+                "action": "none"
+            }
+
+        raw_candidates = _parse_deal_candidates(response_text, fallback_currency=normalized_currency, max_price_ceiling=250.0)
+        ranked_candidates = _filter_and_rank_deals(
+            raw_candidates,
+            min_rating=3.5,
+            max_price_for_mid_rating=250.0,
+            preferred_currency=normalized_currency,
+        )
+
+        shortlisted = ranked_candidates[:max(1, top_n)]
+        if not shortlisted:
+            logger.info("No realistic 3.5+ deals found under $250 ceiling. Searching for better deals...")
+            return {
+                "success": False,
+                "message": "Searching for better deals...",
+                "hotel_name": "",
+                "current_price": None,
+                "action": "none",
+                "preview_required": False,
+                "extracted_deals": [],
+            }
+
+        preview_message = f"Found {len(shortlisted)} deal(s) under $250. Review before hearting."
+        if preview_only:
+            logger.info(preview_message)
+            minimalist_deals = [
+                {
+                    "hotel_name": d.get("hotel_name", ""),
+                    "rating": d.get("rating"),
+                    "price": d.get("final_price"),
+                    "currency": "USD",
+                }
+                for d in shortlisted
+            ]
+            return {
+                "success": True,
+                "message": preview_message,
+                "hotel_name": shortlisted[0].get("hotel_name", ""),
+                "current_price": shortlisted[0].get("final_price"),
+                "action": "preview",
+                "preview_required": True,
+                "extracted_deals": minimalist_deals,
+            }
+
+        heart_goal = f"""
+        Use existing authenticated cookies/session. Do not logout and do not switch accounts.
+        Add these hotels to Favorites by clicking the Heart/Save icon:
+        {json.dumps(shortlisted)}
+
+        For each attempt return one line exactly:
+        ADDED: <hotel_name> | PRICE: <currency><price> | RATING: <rating> | STATUS: <SUCCESS|FAILED>
+        """
+
+        heart_payload = {
+            "url": "https://www.booking.com",
+            "goal": heart_goal,
+        }
+
+        heart_response = call_tinyfish_api(url, headers, heart_payload, timeout=180, max_retries=1)
+        if heart_response is None:
+            minimalist_deals = [
+                {
+                    "hotel_name": d.get("hotel_name", ""),
+                    "rating": d.get("rating"),
+                    "price": d.get("final_price"),
+                    "currency": "USD",
+                }
+                for d in shortlisted
+            ]
+            return {
+                "success": False,
+                "message": "Failed during favorites hearting step",
+                "hotel_name": shortlisted[0].get("hotel_name", ""),
+                "current_price": shortlisted[0].get("final_price"),
+                "action": "none",
+                "preview_required": False,
+                "extracted_deals": minimalist_deals,
+            }
+
+        added_hotels: List[Dict[str, Any]] = []
+        for candidate in shortlisted:
+            hotel_name = candidate.get("hotel_name", "Unknown Hotel")
+            price = float(candidate.get("final_price", 0.0))
+            rating = float(candidate.get("rating", 0.0))
+            success_pattern = re.search(
+                rf"ADDED\s*:\s*{re.escape(hotel_name)}[\s\S]*?STATUS\s*:\s*SUCCESS",
+                heart_response,
+                re.IGNORECASE,
+            )
+            if success_pattern:
+                log_line = f"[{datetime.now().isoformat()}] | Found: {hotel_name} | Rating: {rating:.1f} | Price: {normalized_currency} {price:.2f} | Status: Added to Favs ✅"
+                logger.info(log_line)
+                logger.info(f"Successfully added {hotel_name} to Favorites at {normalized_currency} {price:.2f} (3.5+ Rating detected).")
+                added_hotels.append(candidate)
+
+        if added_hotels:
+            top_hotel = added_hotels[0]
+            minimalist_deals = [
+                {
+                    "hotel_name": d.get("hotel_name", ""),
+                    "rating": d.get("rating"),
+                    "price": d.get("final_price"),
+                    "currency": "USD",
+                }
+                for d in added_hotels
+            ]
+            return {
+                "success": True,
+                "message": f"Added {len(added_hotels)} hotel(s) to Favorites",
+                "hotel_name": top_hotel.get("hotel_name", ""),
+                "current_price": top_hotel.get("final_price"),
+                "action": "saved",
+                "preview_required": False,
+                "extracted_deals": minimalist_deals,
+                "added_hotels": added_hotels,
+            }
+
+        minimalist_deals = [
+            {
+                "hotel_name": d.get("hotel_name", ""),
+                "rating": d.get("rating"),
+                "price": d.get("final_price"),
+                "currency": "USD",
+            }
+            for d in shortlisted
+        ]
+        return {
+            "success": False,
+            "message": "No hotels were confirmed as added to Favorites",
+            "hotel_name": shortlisted[0].get("hotel_name", ""),
+            "current_price": shortlisted[0].get("final_price"),
+            "action": "none",
+            "preview_required": False,
+            "extracted_deals": minimalist_deals,
+        }
+    except Exception as e:
+        logger.error(f"Smart Wishlist Hunter failed: {e}")
+        return {
+            "success": False,
+            "message": f"Smart Wishlist Hunter failed: {e}",
+            "hotel_name": "",
+            "current_price": None,
+            "action": "none",
+            "preview_required": False,
+            "extracted_deals": [],
+        }
+
+
+__all__ = ['get_current_price', 'login_to_booking_site', 'fetch_reservations', 'cancel_booking', 'rebook_with_new_price', 'manage_favorites']
