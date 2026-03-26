@@ -4,7 +4,16 @@
 
 RefundFish is an intelligent automation system that monitors hotel booking prices and helps you capture price drops. Using advanced AI agents and browser automation, RefundFish can automatically track prices, verify room details, and execute safe cancellations with refund validation.
 
-## Features
+## ✨ Key Features
+
+### Core Capabilities
+
+- 🎯 **Smart Quality Filter** - Only fetches hotels with 3.5+ star rating for reliable stays
+- 💰 **Price Sanity Engine** - Intelligently filters out unrealistic high prices and focuses on genuine savings opportunities
+- 🔐 **Session-Aware Authentication** - Uses existing browser cookies for secure, password-less access
+- ❤️ **Automated Wishlist** - Seamlessly interacts with the "Heart" icon to save and manage deals
+
+### Advanced Features
 
 - 🤖 **Autonomous Price Monitoring** - Continuously search for better prices across booking platforms
 - 🔗 **Multi-Platform Support** - Works with Booking.com, Expedia, Hotels.com, Kayak, and more
@@ -46,24 +55,24 @@ RefundFish is an intelligent automation system that monitors hotel booking price
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript
 - **API Communication**: REST
 
-## Installation
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- Python 3.8 or higher
-- TinyFish API key (get one at [tinyfish.ai](https://tinyfish.ai))
+✅ **Python 3.9+** - Core requirement  
+✅ **Telegram Bot Token** - For real-time price alerts (optional but recommended)  
+✅ **Gmail App Password** - For email notifications (optional)  
+✅ **TinyFish API key** - Optional; demo mode works without it
 
 ### Setup
 
 1. **Clone the repository**
-
    ```bash
    git clone https://github.com/hadjer-b1/RefundFish.git
    cd RefundFish
    ```
 
-2. **Create Python virtual environment**
-
+2. **Create and activate virtual environment**
    ```bash
    python -m venv .venv
    .venv\Scripts\activate  # Windows
@@ -71,25 +80,29 @@ RefundFish is an intelligent automation system that monitors hotel booking price
    ```
 
 3. **Install dependencies**
-
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Configure environment**
-
+4. **Configure environment variables** (optional for demo mode)
    ```bash
    cp .env.example .env
-   # Edit .env and add your TinyFish API key
+   # Add your API keys (or leave blank to use demo mode)
    ```
 
-5. **Start the web application**
+### Execution
 
-   ```bash
-   python app.py
-   ```
+**Start the application:**
+```bash
+python main.py
+```
 
-   Open http://localhost:5000 in your browser
+The application will:
+- Launch the Flask web server on `http://localhost:5000`
+- Automatically enable demo/mock mode if TinyFish API is unavailable
+- Show a user-friendly interface ready for hotel price monitoring
+
+**To stop:** Press `Ctrl+C` in the terminal
 
 ## Usage
 
@@ -280,6 +293,14 @@ This project is provided as-is for personal use and hotel price monitoring.
 ## Support
 
 For issues, questions, or feature requests, please open an issue on GitHub.
+
+---
+
+## 🛡️ Important: Demo Mode for Reliable Evaluation
+
+> To ensure a smooth evaluation experience regardless of TinyFish API's real-time latency or server load during the final hours, we have enabled a Demo/Mock mode by default. This showcases the entire logic: filtering for 3.5+ star hotels, realistic price checking, and the Telegram/Email notification flow.
+
+If you want to test with real price data after TinyFish recovers, set `USE_MOCK_PRICES=false` in `.env`.
 
 ---
 
