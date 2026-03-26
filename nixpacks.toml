@@ -1,12 +1,9 @@
 [phases.setup]
-nixPkgs = ["python311Full", "gcc", "pkg-config", "openssl", "rustc", "cargo"]
+nixPkgs = ["python311Full", "python311Packages.pip", "python311Packages.setuptools", "python311Packages.wheel", "gcc", "pkg-config", "openssl", "rustc", "cargo"]
 
 [phases.install]
 cmds = [
-	"python -m ensurepip --upgrade || true",
-	"python -m pip install --upgrade pip setuptools wheel",
-	"if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; elif [ -f requrements.txt ]; then python -m pip install -r requrements.txt; else echo 'No requirements file found'; exit 1; fi"
-]
+  "PY_BIN=$(command -v python3.11 || command -v python3 || command -v python); $PY_BIN -m ensurepip --upgrade || true; PIP_BIN=$(command -v pip3.11 || command -v pip3 || command -v pip || true); if [ -n \"$PIP_BIN\" ]; then $PIP_BIN install --upgrade pip setuptools wheel; if [ -f requirements.txt ]; then $PIP_BIN install -r requirements.txt; elif [ -f requrements.txt ]; then $PIP_BIN install -r requrements.txt; else echo 'No requirements file found'; exit 1; fi; else $PY_BIN -m pip install --upgrade pip setuptools wheel; if [ -f requirements.txt ]; then $PY_BIN -m pip install -r requirements.txt; elif [ -f requrements.txt ]; then $PY_BIN -m pip install -r requrements.txt; else echo 'No requirements file found'; exit 1; fi; fi"
 
 [start]
 cmd = "gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
